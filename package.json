@@ -32,16 +32,19 @@
     "electron-builder": "^24.13.3",
     "nodemon": "^3.1.4",
     "postcss": "^8.4.38",
+    "rollup": "^4.0.0",
+    "@rollup/rollup-win32-x64-msvc": "^4.0.0",
     "tailwindcss": "^3.4.4",
     "typescript": "^5.4.5",
     "vite": "^5.3.1"
   },
+  "optionalDependencies": {
+    "@rollup/rollup-win32-x64-msvc": "^4.0.0"
+  },
   "build": {
     "appId": "com.pcoptimizer.app",
     "productName": "PC Optimizer",
-    "directories": {
-      "output": "release"
-    },
+    "directories": { "output": "release" },
     "win": {
       "target": ["nsis"],
       "requestedExecutionLevel": "asInvoker"
@@ -51,10 +54,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true
     },
-    "files": [
-      "dist/**/*",
-      "!dist/renderer/**/*"
-    ],
+    "files": ["dist/**/*", "!dist/renderer/**/*"],
     "extraResources": [
       { "from": "dist/renderer", "to": "renderer" }
     ]

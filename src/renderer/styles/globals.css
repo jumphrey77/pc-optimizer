@@ -1,0 +1,129 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html, body, #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    background: #0f1117;
+    color: #e2e8f0;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #2a3347;
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3a4560;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-surface-secondary border border-surface-border rounded-xl p-5;
+  }
+
+  .card-sm {
+    @apply bg-surface-secondary border border-surface-border rounded-lg p-4;
+  }
+
+  .btn {
+    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium
+           transition-all duration-150 cursor-pointer select-none;
+  }
+
+  .btn-primary {
+    @apply btn bg-brand hover:bg-brand-dim text-white;
+  }
+
+  .btn-ghost {
+    @apply btn bg-transparent hover:bg-surface-tertiary text-slate-400 hover:text-slate-200
+           border border-surface-border;
+  }
+
+  .btn-danger {
+    @apply btn bg-danger/10 hover:bg-danger/20 text-danger border border-danger/20;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium;
+  }
+
+  .nav-item {
+    @apply flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm
+           text-slate-400 hover:text-slate-200 hover:bg-surface-tertiary
+           transition-all duration-150 cursor-pointer select-none;
+  }
+
+  .nav-item.active {
+    @apply text-white bg-surface-tertiary;
+  }
+
+  .section-header {
+    @apply text-xs font-semibold uppercase tracking-widest text-slate-500 mb-3;
+  }
+
+  .stat-value {
+    @apply text-2xl font-semibold text-slate-100;
+  }
+
+  .stat-label {
+    @apply text-xs text-slate-500 mt-0.5;
+  }
+}
+
+/* Severity colours */
+.sev-critical { color: #ef4444; }
+.sev-high     { color: #f97316; }
+.sev-medium   { color: #f59e0b; }
+.sev-low      { color: #4f8ef7; }
+.sev-info     { color: #94a3b8; }
+
+.sev-bg-critical { background: rgba(239,68,68,0.1);  border-color: rgba(239,68,68,0.2); }
+.sev-bg-high     { background: rgba(249,115,22,0.1); border-color: rgba(249,115,22,0.2); }
+.sev-bg-medium   { background: rgba(245,158,11,0.1); border-color: rgba(245,158,11,0.2); }
+.sev-bg-low      { background: rgba(79,142,247,0.1); border-color: rgba(79,142,247,0.2); }
+.sev-bg-info     { background: rgba(148,163,184,0.08); border-color: rgba(148,163,184,0.15); }
+
+/* Pulse animation for scan */
+@keyframes scan-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+.scanning { animation: scan-pulse 1.4s ease-in-out infinite; }
+
+/* Slide-in for findings */
+@keyframes slide-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.slide-in {
+  animation: slide-in 0.2s ease-out forwards;
+}
+
+/* Progress bar fill */
+@keyframes fill-bar {
+  from { width: 0%; }
+}
+.fill-bar { animation: fill-bar 0.6s ease-out forwards; }

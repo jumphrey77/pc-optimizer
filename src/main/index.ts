@@ -10,7 +10,10 @@ import { registerRollbackIpc } from './ipc/rollback.ipc'
 import { IPC } from '../shared/types'
 
 log.initialize()
-log.info('PC Optimizer starting up')
+log.info('PC Optimizer starting')
+
+const DEV_URL = 'http://localhost:5173'
+const isDev = process.env.NODE_ENV !== 'production' && !app.isPackaged
 
 let mainWindow: BrowserWindow | null = null
 
@@ -27,7 +30,10 @@ function createWindow(): void {
       symbolColor: '#94a3b8',
       height: 36
     },
+    show: false,
     webPreferences: {
+      // In dev: __dirname is dist/main, preload is dist/main/preload/index.js
+      // In prod: same relative path applies
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
       contextIsolation: true,
@@ -44,15 +50,18 @@ function createWindow(): void {
   registerRollbackIpc()
 
   // Shell helpers
-  ipcMain.handle(IPC.OPEN_PATH, (_, path: string) => shell.openPath(path))
-  ipcMain.handle(IPC.OPEN_URL, (_, url: string) => shell.openExternal(url))
+  ipcMain.handle(IPC.OPEN_PATH, (_, p: string) => shell.openPath(p))
+  ipcMain.handle(IPC.OPEN_URL,  (_, u: string) => shell.openExternal(u))
 
-  if (process.env.NODE_ENV === 'development') {
-    mainWindow.loadURL('http://localhost:5173')
+  if (isDev) {
+    mainWindow.loadURL(DEV_URL)
     mainWindow.webContents.openDevTools({ mode: 'detach' })
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    // Packaged: renderer files are in resources/renderer/
+    mainWindow.loadFile(join(process.resourcesPath, 'renderer/index.html'))
   }
+
+  mainWindow.once('ready-to-show', () => mainWindow?.show())
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
@@ -63,11 +72,5 @@ function createWindow(): void {
 }
 
 app.whenReady().then(createWindow)
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
-})
-
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow()
-})
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
+app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })

@@ -1,58 +1,39 @@
-import * as Registry from 'winreg'
 import * as fs from 'fs'
 import log from 'electron-log'
+import { queryValues, querySubkeyValues, valMap } from '../utils/registry.helper'
 import type { Finding, ScanResult } from '../../shared/types'
 
-async function getValues(hive: string, key: string): Promise<Registry.RegistryItem[]> {
-  return new Promise((resolve) => {
-    const reg = new (Registry as any)({ hive, key })
-    reg.values((err: any, items: Registry.RegistryItem[]) => {
-      resolve(err || !items ? [] : items)
-    })
-  })
+function extractExe(s: string): string {
+  const q = s.match(/^"([^"]+)"/)
+  if (q) return q[1]
+  const sp = s.indexOf(' ')
+  return sp > 0 ? s.slice(0, sp) : s
 }
 
-async function getSubkeys(hive: string, key: string): Promise<Registry.Registry[]> {
-  return new Promise((resolve) => {
-    const reg = new (Registry as any)({ hive, key })
-    reg.keys((err: any, items: Registry.Registry[]) => {
-      resolve(err || !items ? [] : items)
-    })
-  })
-}
-
-function extractExePath(val: string): string {
-  const quoted = val.match(/^"([^"]+)"/)
-  if (quoted) return quoted[1]
-  const space = val.indexOf(' ')
-  return space > 0 ? val.slice(0, space) : val
-}
-
-async function checkRunKeys(hive: string, label: string): Promise<Finding[]> {
+function checkRunKeys(): Finding[] {
   const findings: Finding[] = []
   const RUN_KEYS = [
-    '\\Software\\Microsoft\\Windows\\CurrentVersion\\Run',
-    '\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce',
-    '\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run',
+    { key: 'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run',      hive: 'HKLM' },
+    { key: 'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce',  hive: 'HKLM' },
+    { key: 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run',      hive: 'HKCU' },
   ]
-  for (const key of RUN_KEYS) {
+  for (const { key, hive } of RUN_KEYS) {
     try {
-      const values = await getValues(hive, key)
+      const values = queryValues(key)
       for (const v of values) {
-        const exePath = extractExePath(v.value)
+        const exePath = extractExe(v.value)
         if (!exePath) continue
         if (!fs.existsSync(exePath)) {
           findings.push({
             id: `reg-run-missing-${hive}-${v.name}`.replace(/[^a-z0-9-]/gi, '-').toLowerCase(),
-            module: 'registry',
-            severity: 'medium',
+            module: 'registry', severity: 'medium',
             title: `Run key points to missing file: ${v.name}`,
-            description: `A startup registry entry references "${exePath}" which no longer exists on disk.`,
-            evidence: [`${label}\\${key.split('\\').pop()}`, `${v.name} = ${v.value}`],
+            description: `Startup entry references "${exePath}" which no longer exists.`,
+            evidence: [`${key}`, `${v.name} = ${v.value}`],
             fixType: 'automatic',
-            requiresElevation: hive === Registry.HKLM,
+            requiresElevation: hive === 'HKLM',
             rollbackSupported: true,
-            rollbackPlan: 'The registry value will be exported as a .reg backup before deletion.'
+            rollbackPlan: 'Registry value exported as .reg backup before deletion.',
           })
         }
       }
@@ -61,53 +42,41 @@ async function checkRunKeys(hive: string, label: string): Promise<Finding[]> {
   return findings
 }
 
-async function checkUninstallEntries(): Promise<Finding[]> {
+function checkUninstallEntries(): Finding[] {
   const findings: Finding[] = []
   const UNINSTALL_KEYS = [
-    { hive: Registry.HKLM, key: '\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall' },
-    { hive: Registry.HKLM, key: '\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall' },
+    'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+    'HKLM\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
   ]
-  for (const { hive, key } of UNINSTALL_KEYS) {
+  for (const parentKey of UNINSTALL_KEYS) {
     try {
-      const subkeys = await getSubkeys(hive, key)
-      for (const sub of subkeys) {
-        const values = await new Promise<Registry.RegistryItem[]>(resolve => {
-          sub.values((err: any, items: Registry.RegistryItem[]) => resolve(err ? [] : items || []))
-        })
-        const m: Record<string, string> = {}
-        for (const v of values) m[v.name.toLowerCase()] = v.value
-
+      const subkeys = querySubkeyValues(parentKey)
+      for (const [subkeyPath, values] of subkeys) {
+        const m = valMap(values)
         const name = m['displayname']
         if (!name) continue
-
         const uninstall = m['uninstallstring']
         if (!uninstall) {
           findings.push({
-            id: `reg-uninstall-nostr-${sub.key.slice(-16).replace(/[^a-z0-9]/gi, '-')}`,
-            module: 'registry',
-            severity: 'low',
+            id: `reg-uninstall-nostr-${subkeyPath.slice(-16).replace(/[^a-z0-9]/gi, '-')}`,
+            module: 'registry', severity: 'low',
             title: `Orphaned uninstall entry: ${name}`,
-            description: 'This app appears in Programs & Features but has no uninstall command. It may be a leftover from a previous installation.',
-            evidence: [sub.key, name],
-            fixType: 'automatic',
-            requiresElevation: true,
-            rollbackSupported: true,
-            rollbackPlan: 'Registry key exported as .reg before removal.'
+            description: 'App appears in Programs & Features but has no uninstall command.',
+            evidence: [subkeyPath, name],
+            fixType: 'automatic', requiresElevation: true, rollbackSupported: true,
+            rollbackPlan: 'Registry key exported as .reg before removal.',
           })
         } else {
-          const exePath = extractExePath(uninstall)
+          const exePath = extractExe(uninstall)
           if (exePath && exePath.endsWith('.exe') && !fs.existsSync(exePath)) {
             findings.push({
-              id: `reg-uninstall-broken-${sub.key.slice(-16).replace(/[^a-z0-9]/gi, '-')}`,
-              module: 'registry',
-              severity: 'medium',
+              id: `reg-uninstall-broken-${subkeyPath.slice(-16).replace(/[^a-z0-9]/gi, '-')}`,
+              module: 'registry', severity: 'medium',
               title: `Broken uninstaller: ${name}`,
-              description: `The uninstaller executable for "${name}" no longer exists. The app cannot be uninstalled normally.`,
+              description: `Uninstaller executable for "${name}" no longer exists.`,
               evidence: [uninstall, exePath],
-              fixType: 'automatic',
-              requiresElevation: true,
-              rollbackSupported: true,
-              rollbackPlan: 'Registry key exported as .reg before removal.'
+              fixType: 'automatic', requiresElevation: true, rollbackSupported: true,
+              rollbackPlan: 'Registry key exported as .reg before removal.',
             })
           }
         }
@@ -117,38 +86,37 @@ async function checkUninstallEntries(): Promise<Finding[]> {
   return findings
 }
 
-async function checkFileAssociations(): Promise<Finding[]> {
+function checkFileAssociations(): Finding[] {
   const findings: Finding[] = []
   try {
-    const subkeys = await getSubkeys(Registry.HKCU, '\\Software\\Classes')
+    const subkeys = querySubkeyValues('HKCU\\Software\\Classes')
     let brokenCount = 0
     const brokenNames: string[] = []
-    for (const sub of subkeys.slice(0, 100)) {
-      const name = sub.key.split('\\').pop() || ''
-      if (!name.startsWith('.')) continue
+    let checked = 0
+    for (const [skPath] of subkeys) {
+      if (checked++ > 80) break
+      const ext = skPath.split('\\').pop() || ''
+      if (!ext.startsWith('.')) continue
       try {
-        const openCmd = await getValues(sub.hive, sub.key + '\\shell\\open\\command')
-        if (openCmd.length > 0) {
-          const exePath = extractExePath(openCmd[0].value)
+        const cmdValues = queryValues(`${skPath}\\shell\\open\\command`)
+        if (cmdValues.length > 0) {
+          const exePath = extractExe(cmdValues[0].value)
           if (exePath && exePath.endsWith('.exe') && !fs.existsSync(exePath)) {
             brokenCount++
-            brokenNames.push(`${name} → ${exePath}`)
+            brokenNames.push(`${ext} → ${exePath}`)
           }
         }
       } catch { /* skip */ }
     }
     if (brokenCount > 0) {
       findings.push({
-        id: 'reg-broken-associations',
-        module: 'registry',
+        id: 'reg-broken-associations', module: 'registry',
         severity: brokenCount > 5 ? 'medium' : 'low',
         title: `${brokenCount} broken file associations`,
-        description: 'These file types have custom open handlers that point to apps no longer installed. Double-clicking these file types will show an error.',
+        description: 'File types with handlers pointing to apps no longer installed.',
         evidence: brokenNames.slice(0, 10),
-        fixType: 'guided',
-        requiresElevation: false,
-        rollbackSupported: true,
-        rollbackPlan: 'Affected keys exported as .reg before any changes.'
+        fixType: 'guided', requiresElevation: false, rollbackSupported: true,
+        rollbackPlan: 'Affected keys exported as .reg before changes.',
       })
     }
   } catch { /* skip */ }
@@ -159,25 +127,15 @@ export async function scanRegistry(): Promise<ScanResult> {
   const startedAt = new Date().toISOString()
   const errors: string[] = []
   let findings: Finding[] = []
-
   try {
-    const [hklmRun, hkcuRun, uninstall, associations] = await Promise.all([
-      checkRunKeys(Registry.HKLM, 'HKLM'),
-      checkRunKeys(Registry.HKCU, 'HKCU'),
-      checkUninstallEntries(),
-      checkFileAssociations(),
-    ])
-    findings = [...hklmRun, ...hkcuRun, ...uninstall, ...associations]
+    findings = [
+      ...checkRunKeys(),
+      ...checkUninstallEntries(),
+      ...checkFileAssociations(),
+    ]
   } catch (e: any) {
     errors.push(e.message)
     log.error('scanRegistry error', e)
   }
-
-  return {
-    module: 'registry',
-    startedAt,
-    completedAt: new Date().toISOString(),
-    findings,
-    errors
-  }
+  return { module: 'registry', startedAt, completedAt: new Date().toISOString(), findings, errors }
 }

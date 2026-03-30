@@ -1,0 +1,6 @@
+{
+  "watch": ["dist/main"],
+  "ext": "js",
+  "ignore": ["dist/renderer"],
+  "delay": "500"
+}

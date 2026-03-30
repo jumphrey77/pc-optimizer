@@ -4,19 +4,20 @@
   "description": "PC Diagnostic & Optimization Tool",
   "main": "dist/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build",
-    "preview": "electron-vite preview",
+    "dev": "concurrently --kill-others \"npm run dev:vite\" \"npm run dev:main\" \"npm run dev:electron\"",
+    "dev:vite": "vite",
+    "dev:main": "tsc -p tsconfig.main.json --watch",
+    "dev:electron": "nodemon --watch dist/main/index.js --exec \"electron .\"",
+    "build": "npm run build:main && npm run build:renderer",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "vite build",
     "package": "npm run build && electron-builder",
-    "lint": "eslint src --ext .ts,.tsx"
+    "preview": "vite preview"
   },
   "dependencies": {
-    "winreg": "^1.2.5",
-    "node-windows": "^1.0.0-beta.8",
     "recharts": "^2.12.7",
     "zustand": "^4.5.4",
     "electron-log": "^5.1.7",
-    "runas": "^3.1.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.400.0"
   },
@@ -24,29 +25,38 @@
     "@types/node": "^20.14.0",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
-    "@types/winreg": "^1.2.4",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.19",
+    "concurrently": "^8.2.2",
     "electron": "^31.0.1",
     "electron-builder": "^24.13.3",
-    "electron-vite": "^2.3.0",
+    "nodemon": "^3.1.4",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.4",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "vite": "^5.3.1"
   },
   "build": {
     "appId": "com.pcoptimizer.app",
     "productName": "PC Optimizer",
+    "directories": {
+      "output": "release"
+    },
     "win": {
       "target": ["nsis"],
-      "requestedExecutionLevel": "asInvoker",
-      "icon": "public/icon.ico"
+      "requestedExecutionLevel": "asInvoker"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true
     },
-    "files": ["dist/**/*", "public/**/*"]
+    "files": [
+      "dist/**/*",
+      "!dist/renderer/**/*"
+    ],
+    "extraResources": [
+      { "from": "dist/renderer", "to": "renderer" }
+    ]
   }
 }

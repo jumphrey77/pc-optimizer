@@ -1,9 +1,9 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import { execSync } from 'child_process'
-import * as Registry from 'winreg'
+import { execFileSync } from 'child_process'
 import log from 'electron-log'
-import { appendActionLog, exportRegistryKey } from '../rollback/rollback.engine'
+import { deleteValue, deleteKey, exportKey } from '../utils/registry.helper'
+import { appendActionLog } from '../rollback/rollback.engine'
 
 interface FixResult {
   success: boolean
@@ -13,78 +13,53 @@ interface FixResult {
 
 // ─── Disk fixes ──────────────────────────────────────────────────────────────
 
-async function fixDeleteDir(dirPath: string, findingId: string, findingTitle: string): Promise<FixResult> {
+function clearDirectory(dirPath: string, findingId: string, findingTitle: string): FixResult {
   try {
-    if (!fs.existsSync(dirPath)) {
-      return { success: false, error: 'Path no longer exists' }
-    }
+    if (!fs.existsSync(dirPath)) return { success: false, error: 'Path no longer exists' }
     const sizeBefore = getDirSize(dirPath)
-    // Delete contents but not the directory itself (safer for system folders)
     const entries = fs.readdirSync(dirPath)
     let deleted = 0
     for (const entry of entries) {
-      const full = path.join(dirPath, entry)
-      try {
-        fs.rmSync(full, { recursive: true, force: true })
-        deleted++
-      } catch { /* skip locked files */ }
+      try { fs.rmSync(path.join(dirPath, entry), { recursive: true, force: true }); deleted++ }
+      catch { /* skip locked files */ }
     }
-    appendActionLog(findingId, findingTitle, 'fix', 'success',
-      `Cleared ${deleted} items from ${dirPath}`, undefined)
+    appendActionLog(findingId, findingTitle, 'fix', 'success', `Cleared ${deleted} items from ${dirPath}`)
     return { success: true, bytesSaved: sizeBefore }
   } catch (e: any) {
-    log.error('fixDeleteDir', e)
     return { success: false, error: e.message }
   }
 }
 
 // ─── Registry fixes ──────────────────────────────────────────────────────────
 
-async function fixDeleteRegistryValue(
-  hive: string, key: string, valueName: string,
-  findingId: string, findingTitle: string
-): Promise<FixResult> {
+function fixRegistryKey(keyPath: string, valueName: string | null, findingId: string, findingTitle: string): FixResult {
   try {
-    // Backup first
-    const backupFile = exportRegistryKey(hive, key, findingId)
-    const reg = new (Registry as any)({ hive, key })
-    await new Promise<void>((resolve, reject) => {
-      reg.remove(valueName, (err: any) => err ? reject(err) : resolve())
-    })
-    appendActionLog(findingId, findingTitle, 'fix', 'success',
-      `Removed registry value: ${valueName}`,
-      backupFile ? { type: 'registry', regFile: backupFile } : undefined
+    const backupFile = path.join(
+      process.env.APPDATA || 'C:\\Users\\User\\AppData\\Roaming',
+      `pc-optimizer\\rollback\\${findingId.replace(/[^a-z0-9]/gi, '_')}_${Date.now()}.reg`
     )
-    return { success: true }
-  } catch (e: any) {
-    log.error('fixDeleteRegistryValue', e)
-    return { success: false, error: e.message }
-  }
-}
+    fs.mkdirSync(path.dirname(backupFile), { recursive: true })
+    exportKey(keyPath, backupFile)
 
-async function fixDeleteRegistryKey(
-  hive: string, key: string,
-  findingId: string, findingTitle: string
-): Promise<FixResult> {
-  try {
-    const backupFile = exportRegistryKey(hive, key, findingId)
-    execSync(`reg delete "${hive}${key}" /f`, { timeout: 10000 })
+    const ok = valueName ? deleteValue(keyPath, valueName) : deleteKey(keyPath)
+    if (!ok) return { success: false, error: 'Registry operation failed' }
+
     appendActionLog(findingId, findingTitle, 'fix', 'success',
-      `Removed registry key: ${key}`,
-      backupFile ? { type: 'registry', regFile: backupFile } : undefined
+      valueName ? `Removed value: ${valueName}` : `Removed key: ${keyPath}`,
+      { type: 'registry', regFile: backupFile }
     )
     return { success: true }
   } catch (e: any) {
-    log.error('fixDeleteRegistryKey', e)
+    log.error('fixRegistryKey', e)
     return { success: false, error: e.message }
   }
 }
 
 // ─── Security fixes ──────────────────────────────────────────────────────────
 
-async function fixDisableGuestAccount(findingId: string, findingTitle: string): Promise<FixResult> {
+function fixDisableGuestAccount(findingId: string, findingTitle: string): FixResult {
   try {
-    execSync('net user Guest /active:no', { timeout: 10000 })
+    execFileSync('net.exe', ['user', 'Guest', '/active:no'], { timeout: 10000 })
     appendActionLog(findingId, findingTitle, 'fix', 'success', 'Disabled Guest account')
     return { success: true }
   } catch (e: any) {
@@ -92,14 +67,19 @@ async function fixDisableGuestAccount(findingId: string, findingTitle: string): 
   }
 }
 
-async function fixDisableAutorun(findingId: string, findingTitle: string): Promise<FixResult> {
+function fixDisableAutorun(findingId: string, findingTitle: string): FixResult {
   try {
-    const hive = 'HKLM'
-    const key = '\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer'
-    const backupFile = exportRegistryKey(hive, key, findingId)
-    execSync(`reg add "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer" /v NoDriveTypeAutoRun /t REG_DWORD /d 255 /f`, { timeout: 10000 })
-    appendActionLog(findingId, findingTitle, 'fix', 'success', 'Disabled AutoRun for all drive types',
-      backupFile ? { type: 'registry', regFile: backupFile } : undefined)
+    const keyPath = 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer'
+    const backupFile = path.join(
+      process.env.APPDATA || '', `pc-optimizer\\rollback\\autorun_${Date.now()}.reg`
+    )
+    fs.mkdirSync(path.dirname(backupFile), { recursive: true })
+    exportKey(keyPath, backupFile)
+    execFileSync('reg.exe', [
+      'add', keyPath, '/v', 'NoDriveTypeAutoRun', '/t', 'REG_DWORD', '/d', '255', '/f'
+    ], { timeout: 10000 })
+    appendActionLog(findingId, findingTitle, 'fix', 'success',
+      'Disabled AutoRun for all drive types', { type: 'registry', regFile: backupFile })
     return { success: true }
   } catch (e: any) {
     return { success: false, error: e.message }
@@ -110,56 +90,39 @@ async function fixDisableAutorun(findingId: string, findingTitle: string): Promi
 
 export async function applyFix(findingId: string, findingTitle: string): Promise<FixResult> {
   log.info(`applyFix: ${findingId}`)
-
   const userProfile = process.env.USERPROFILE || 'C:\\Users\\User'
 
-  // Disk fixes
-  if (findingId === 'disk-win-temp') {
-    return fixDeleteDir('C:\\Windows\\Temp', findingId, findingTitle)
-  }
-  if (findingId === 'disk-user-temp') {
-    return fixDeleteDir(path.join(userProfile, 'AppData\\Local\\Temp'), findingId, findingTitle)
-  }
-  if (findingId.startsWith('disk-cache-')) {
-    // Reconstruct the path from the finding id — in production you'd
-    // look up the finding from a persisted scan result
-    return { success: false, error: 'Re-scan required before applying cache fix' }
-  }
+  if (findingId === 'disk-win-temp')
+    return clearDirectory('C:\\Windows\\Temp', findingId, findingTitle)
 
-  // Security fixes
-  if (findingId === 'sec-guest-enabled') {
+  if (findingId === 'disk-user-temp')
+    return clearDirectory(path.join(userProfile, 'AppData\\Local\\Temp'), findingId, findingTitle)
+
+  if (findingId === 'sec-guest-enabled')
     return fixDisableGuestAccount(findingId, findingTitle)
-  }
-  if (findingId === 'sec-autorun-enabled') {
+
+  if (findingId === 'sec-autorun-enabled')
     return fixDisableAutorun(findingId, findingTitle)
-  }
 
-  // Registry fixes
-  if (findingId.startsWith('reg-run-missing-')) {
-    return { success: false, error: 'Re-scan and select the specific entry to remove.' }
-  }
-  if (findingId.startsWith('reg-uninstall-')) {
-    return { success: false, error: 'Re-scan and select the specific entry to remove.' }
-  }
+  if (findingId.startsWith('reg-run-missing-'))
+    return { success: false, error: 'Re-scan to identify exact registry key before removing.' }
 
-  // App fixes (broken installs — guided only, we don't auto-delete)
-  if (findingId.startsWith('app-broken-')) {
-    return { success: false, error: 'Use the uninstaller or Windows Settings > Apps to remove.' }
-  }
+  if (findingId.startsWith('reg-uninstall-'))
+    return { success: false, error: 'Re-scan to identify exact registry key before removing.' }
 
   return { success: false, error: `No fix handler registered for: ${findingId}` }
 }
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function getDirSize(dirPath: string, depth = 0): number {
+function getDirSize(dir: string, depth = 0): number {
   if (depth > 2) return 0
   try {
-    return fs.readdirSync(dirPath, { withFileTypes: true }).reduce((acc, entry) => {
-      const full = path.join(dirPath, entry.name)
+    return fs.readdirSync(dir, { withFileTypes: true }).reduce((acc, e) => {
+      const full = path.join(dir, e.name)
       try {
-        if (entry.isFile()) return acc + fs.statSync(full).size
-        if (entry.isDirectory() && !entry.isSymbolicLink()) return acc + getDirSize(full, depth + 1)
+        if (e.isFile()) return acc + fs.statSync(full).size
+        if (e.isDirectory() && !e.isSymbolicLink()) return acc + getDirSize(full, depth + 1)
       } catch { /* skip */ }
       return acc
     }, 0)

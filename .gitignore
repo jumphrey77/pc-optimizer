@@ -5,5 +5,4 @@ pine_scripts/
 config/user-config.json
 *.log
 .DS_Store
-zips/
-needed-updates.txt  
+zips/  

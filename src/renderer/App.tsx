@@ -1,4 +1,5 @@
 import { useStore } from './store/useStore'
+import { TitleBar } from './components/TitleBar'
 import { Sidebar } from './components/Sidebar'
 import { Dashboard } from './pages/Dashboard'
 import { DiskSpace } from './pages/DiskSpace'
@@ -22,11 +23,14 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen bg-surface overflow-hidden">
-      <Sidebar />
-      <main className="flex-1 overflow-hidden">
-        {pages[activeModule] ?? <Dashboard />}
-      </main>
+    <div className="flex flex-col h-screen bg-surface overflow-hidden">
+      <TitleBar />
+      <div className="flex flex-1 overflow-hidden">
+        <Sidebar />
+        <main className="flex-1 overflow-hidden">
+          {pages[activeModule] ?? <Dashboard />}
+        </main>
+      </div>
     </div>
   )
 }

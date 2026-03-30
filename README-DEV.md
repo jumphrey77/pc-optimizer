@@ -13,7 +13,7 @@ Electron tries to launch.
 npx tsc -p tsconfig.main.json
 
 # Step 2 - then start everything together
-npx tsc -p tsconfig.main.json
+npm run dev
 ```
 
 After that, `npm run dev` works fine on its own because
@@ -21,11 +21,11 @@ After that, `npm run dev` works fine on its own because
 
 ## What each process does
 
-| Process | What it runs |
-|----|----|
-| `dev:vite` | Vite dev server at http://localhost:5173 |
-| `dev:main` | tsc --watch on src/main + src/preload |
-| `dev:electron` | nodemon watches dist/main, restarts Electron when main recompiles |
+| Process       | What it runs                              |
+|---------------|-------------------------------------------|
+| `dev:vite`    | Vite dev server at http://localhost:5173  |
+| `dev:main`    | tsc --watch on src/main + src/preload     |
+| `dev:electron`| nodemon watches dist/main, restarts Electron when main recompiles |
 
 ## If Electron shows a blank white screen
 
@@ -38,5 +38,3 @@ Just press Ctrl+R inside the Electron window to reload.
 npm run build    # compiles everything to dist/
 npm run package  # wraps dist/ into an NSIS installer in release/
 ```
-
-

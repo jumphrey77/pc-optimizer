@@ -1,6 +1,6 @@
 import * as fs from 'fs'
 import log from 'electron-log'
-import { querySubkeyValues, valMap } from '../utils/registry.helper'
+import { querySubkeys, queryValues, valMap } from '../utils/registry.helper'
 import type { InstalledApp, Finding, ScanResult } from '../../shared/types'
 
 const BLOATWARE_PATTERNS = [
@@ -25,54 +25,85 @@ const UNINSTALL_KEYS = [
   'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
 ]
 
+function extractExe(s: string): string {
+  const q = s.match(/^"([^"]+)"/)
+  if (q) return q[1]
+  const sp = s.indexOf(' ')
+  return sp > 0 ? s.slice(0, sp) : s
+}
+
+function slug(s: string): string {
+  return s.slice(-12).replace(/[^a-z0-9]/gi, '-').toLowerCase()
+}
+
+/** Yield control back to event loop between chunks to prevent freezing */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise(resolve => setImmediate(resolve))
+}
+
 export async function getInstalledApps(): Promise<InstalledApp[]> {
   const apps: InstalledApp[] = []
   const seen = new Set<string>()
 
   for (const parentKey of UNINSTALL_KEYS) {
     try {
-      const subkeys = querySubkeyValues(parentKey)
-      for (const [subkeyPath, values] of subkeys) {
-        const m = valMap(values)
-        const name = m['displayname']?.trim()
-        if (!name) continue
-        if (seen.has(name.toLowerCase())) continue
-        seen.add(name.toLowerCase())
-        if (m['systemcomponent'] === '1') continue
-        if (m['releasetype'] === 'Security Update' || m['releasetype'] === 'Update') continue
-        if (m['parentkeyname']) continue
+      const subkeys = querySubkeys(parentKey)
 
-        const uninstallStr = m['uninstallstring'] || ''
-        const sizeKb = parseInt(m['estimatedsize'] || '0')
-        let isBrokenInstall = false
-        if (uninstallStr) {
-          const exePath = extractExe(uninstallStr)
-          isBrokenInstall = !!exePath && exePath.endsWith('.exe') && !fs.existsSync(exePath)
+      // Process in chunks of 20 to keep event loop responsive
+      const CHUNK = 20
+      for (let i = 0; i < subkeys.length; i += CHUNK) {
+        await yieldToEventLoop()
+        const chunk = subkeys.slice(i, i + CHUNK)
+
+        for (const sk of chunk) {
+          try {
+            const values = queryValues(sk)
+            const m = valMap(values)
+            const name = m['displayname']?.trim()
+            if (!name) continue
+            if (seen.has(name.toLowerCase())) continue
+            seen.add(name.toLowerCase())
+            if (m['systemcomponent'] === '1') continue
+            if (m['releasetype'] === 'Security Update' || m['releasetype'] === 'Update') continue
+            if (m['parentkeyname']) continue
+
+            const uninstallStr = m['uninstallstring'] || ''
+            const sizeKb = parseInt(m['estimatedsize'] || '0')
+
+            let isBrokenInstall = false
+            if (uninstallStr) {
+              const exePath = extractExe(uninstallStr)
+              isBrokenInstall = !!exePath && exePath.endsWith('.exe') && !fs.existsSync(exePath)
+            }
+
+            const isBloatware = BLOATWARE_PATTERNS.some(p => p.test(name))
+            let runtimeType: InstalledApp['runtimeType'] = null
+            for (const { pattern, type } of RUNTIME_PATTERNS) {
+              if (pattern.test(name)) { runtimeType = type; break }
+            }
+
+            apps.push({
+              id: sk,
+              name,
+              publisher:       m['publisher'] || undefined,
+              version:         m['displayversion'] || undefined,
+              installDate:     m['installdate'] || undefined,
+              installLocation: m['installlocation'] || undefined,
+              estimatedSize:   sizeKb ? sizeKb * 1024 : undefined,
+              uninstallString: uninstallStr || undefined,
+              isBloatware,
+              isBrokenInstall,
+              runtimeType,
+              startupImpact:   'none',
+            })
+          } catch { /* skip bad entry */ }
         }
-        const isBloatware = BLOATWARE_PATTERNS.some(p => p.test(name))
-        let runtimeType: InstalledApp['runtimeType'] = null
-        for (const { pattern, type } of RUNTIME_PATTERNS) {
-          if (pattern.test(name)) { runtimeType = type; break }
-        }
-        apps.push({
-          id: subkeyPath,
-          name,
-          publisher:       m['publisher'] || undefined,
-          version:         m['displayversion'] || undefined,
-          installDate:     m['installdate'] || undefined,
-          installLocation: m['installlocation'] || undefined,
-          estimatedSize:   sizeKb ? sizeKb * 1024 : undefined,
-          uninstallString: uninstallStr || undefined,
-          isBloatware,
-          isBrokenInstall,
-          runtimeType,
-          startupImpact:   'none',
-        })
       }
     } catch (e) {
       log.warn(`getInstalledApps key error: ${parentKey}`, e)
     }
   }
+
   return apps.sort((a, b) => a.name.localeCompare(b.name))
 }
 
@@ -80,8 +111,10 @@ export async function scanApps(): Promise<ScanResult> {
   const startedAt = new Date().toISOString()
   const findings: Finding[] = []
   const errors: string[] = []
+
   try {
     const apps = await getInstalledApps()
+
     for (const app of apps.filter(a => a.isBloatware)) {
       findings.push({
         id: `app-bloat-${slug(app.id)}`, module: 'apps', severity: 'low',
@@ -91,6 +124,7 @@ export async function scanApps(): Promise<ScanResult> {
         fixType: 'guided', requiresElevation: false, rollbackSupported: false,
       })
     }
+
     for (const app of apps.filter(a => a.isBrokenInstall)) {
       findings.push({
         id: `app-broken-${slug(app.id)}`, module: 'apps', severity: 'medium',
@@ -101,6 +135,7 @@ export async function scanApps(): Promise<ScanResult> {
         rollbackPlan: 'Registry key exported as .reg before removal.',
       })
     }
+
     const runtimesByType: Record<string, InstalledApp[]> = {}
     for (const app of apps.filter(a => a.runtimeType)) {
       const k = app.runtimeType!
@@ -119,7 +154,10 @@ export async function scanApps(): Promise<ScanResult> {
         })
       }
     }
-    const pdfReaders = apps.filter(a => /pdf/i.test(a.name) && /(reader|viewer|editor)/i.test(a.name))
+
+    const pdfReaders = apps.filter(a =>
+      /pdf/i.test(a.name) && /(reader|viewer|editor)/i.test(a.name)
+    )
     if (pdfReaders.length > 1) {
       findings.push({
         id: 'app-dup-pdf', module: 'apps', severity: 'low',
@@ -129,20 +167,11 @@ export async function scanApps(): Promise<ScanResult> {
         fixType: 'manual', requiresElevation: false, rollbackSupported: false,
       })
     }
+
   } catch (e: any) {
     errors.push(e.message)
     log.error('scanApps error', e)
   }
+
   return { module: 'apps', startedAt, completedAt: new Date().toISOString(), findings, errors }
-}
-
-function extractExe(s: string): string {
-  const q = s.match(/^"([^"]+)"/)
-  if (q) return q[1]
-  const sp = s.indexOf(' ')
-  return sp > 0 ? s.slice(0, sp) : s
-}
-
-function slug(s: string): string {
-  return s.slice(-12).replace(/[^a-z0-9]/gi, '-').toLowerCase()
 }

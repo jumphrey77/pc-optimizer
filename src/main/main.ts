@@ -10,10 +10,9 @@ import { registerRollbackIpc } from './ipc/rollback.ipc'
 import { IPC } from '../shared/types'
 
 log.initialize()
-log.info('PC Optimizer starting')
 
 const DEV_URL = 'http://localhost:5173'
-const isDev = process.env.NODE_ENV !== 'production' && !app.isPackaged
+const isDev = !app.isPackaged
 
 let mainWindow: BrowserWindow | null = null
 
@@ -24,24 +23,18 @@ function createWindow(): void {
     minWidth: 1024,
     minHeight: 680,
     backgroundColor: '#0f1117',
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#0f1117',
-      symbolColor: '#94a3b8',
-      height: 36
-    },
+    frame: false,
     show: false,
     webPreferences: {
-      // In dev: __dirname is dist/main, preload is dist/main/preload/index.js
-      // In prod: same relative path applies
-      preload: join(__dirname, '../preload/index.js'),
+      preload: join(__dirname, '../preload/preload.js'),
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false
     }
   })
 
-  // Register all IPC handlers
+  mainWindow.removeMenu()
+
   registerDiskIpc()
   registerAppsIpc()
   registerStartupIpc()
@@ -49,15 +42,19 @@ function createWindow(): void {
   registerSecurityIpc()
   registerRollbackIpc()
 
-  // Shell helpers
   ipcMain.handle(IPC.OPEN_PATH, (_, p: string) => shell.openPath(p))
   ipcMain.handle(IPC.OPEN_URL,  (_, u: string) => shell.openExternal(u))
 
+  ipcMain.handle('win:minimize', () => mainWindow?.minimize())
+  ipcMain.handle('win:maximize', () => {
+    if (mainWindow?.isMaximized()) mainWindow.unmaximize()
+    else mainWindow?.maximize()
+  })
+  ipcMain.handle('win:close', () => mainWindow?.close())
+
   if (isDev) {
     mainWindow.loadURL(DEV_URL)
-    mainWindow.webContents.openDevTools({ mode: 'detach' })
   } else {
-    // Packaged: renderer files are in resources/renderer/
     mainWindow.loadFile(join(process.resourcesPath, 'renderer/index.html'))
   }
 
